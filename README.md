@@ -8,9 +8,11 @@ This program was developed and used on a Raspberry Pi. The MPU's I/O pins were w
   * GND  ->  GND
   * SCL  ->  SCL1
   * SDA  ->  SDA1
-  * EOA  ->  ~
-  * ECL  ->  ~
-  * ADO  ->  ~
-  * INT  ->  ~
-  * NCS  ->  ~
-  * FSYNC->  ~
+  * EOA  ->  NC
+  * ECL  ->  NC
+  * ADO  ->  NC
+  * INT  ->  NC
+  * NCS  ->  NC
+  * FSYNC->  NC
+
+(NC) Not Connected
