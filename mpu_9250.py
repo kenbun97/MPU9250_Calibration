@@ -31,6 +31,8 @@ import RPi.GPIO as GPIO
 from scipy.stats import t
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
+import csv
+import os.path
 
 # Register
 power_mgmt_1 = 0x6b
@@ -43,6 +45,37 @@ G_YcountsPerG = 16348.0
 G_YcountOffset = 0
 G_ZcountsPerG = 16348.0
 G_ZcountOffset = 0
+G_keepHistory = False
+G_calibrationFile = None
+G_csvWriter = None
+G_calibrations = []
+
+# Create the Calibration CSV if it does not exist
+def getCSV():
+    global G_calibrationFile
+    global G_csvWriter
+    global G_calibrations
+    newFileFlag = False
+    if os.path.isfile('calibrations.csv'):
+        readCalibrationFile = open('calibrations.csv', 'r')
+        csvReader = csv.DictReader(readCalibrationFile)
+        for line in csvReader:
+            G_calibrations.append(line)
+        print(G_calibrations)
+    else:
+        newFileFlag = True
+    G_calibrationFile = open('calibrations.csv', 'w', newline='')
+    fields = ['name','coefficient','intercept']
+    G_csvWriter = csv.DictWriter(G_calibrationFile, fields)
+    G_csvWriter.writeheader()
+
+getCSV()
+
+# Write the calibrations to the CSV file
+def writeCSV():
+    global G_csvWriter
+    global G_calibrations
+    G_csvWriter.writerows(G_calibrations)
 
 # Read a byte from the MPU sensor
 def read_byte(reg):
@@ -62,6 +95,10 @@ def read_word_2c(reg):
         return -((65535 - val) + 1)
     else:
         return val
+
+# Write a byte to the MPU sensor
+def write_byte(reg,offset,val):
+    bus.write_byte_data(reg, offset, val)
 
 # Find the vector sum of two values
 def dist(a,b):
@@ -102,6 +139,68 @@ def accelZ(xRot,yRot):
     else:
         return -math.cos(math.radians(xRot))*math.cos(math.radians(yRot))
 
+# Take Accelerometer measurements and find the uncertainties
+def takeDataMPU(sensor, factoryCal = False):
+    counts, idealAccels, accels = [], [], []
+    df = -1
+    while(input('Set the MPU orientation, then press \'Enter\' when you are ready\nto record the data point or type \'q\' to quit: ') != 'q'):
+        # Read the acceleration values from the sensor
+        accelerometerCountsXout = read_word_2c(0x3b)
+        accelerometerCountsYout = read_word_2c(0x3d)
+        accelerometerCountsZout = read_word_2c(0x3f)
+        
+        # Use the acceleration values to approximate the x and y rotation of the sensor
+        x_rot = get_x_rotation(accelerometerCountsXout,accelerometerCountsYout,accelerometerCountsZout)
+        y_rot = get_y_rotation(accelerometerCountsXout,accelerometerCountsYout,accelerometerCountsZout)
+        
+        if(factoryCal):
+            # Use the ideal factory calibration to find the ideal acceleration
+            accelerationXout = accelerometerCountsXout / 16384.0
+            accelerationYout = accelerometerCountsYout / 16384.0
+            accelerationZout = accelerometerCountsZout / 16384.0
+        else:
+            accelerationXout = (accelerometerCountsXout - G_XcountOffset) / G_XcountsPerG
+            accelerationYout = (accelerometerCountsYout - G_YcountOffset) / G_YcountsPerG
+            accelerationZout = (accelerometerCountsZout - G_ZcountOffset) / G_ZcountsPerG
+        
+        # Increase the degrees of freedom after each new data point
+        df += 1
+        
+        # Append the counts, actual acceleration values, and the ideal acceleration values to a list
+        if(sensor == 'x'):
+            counts.append(accelerometerCountsXout)
+            accels.append(accelX(y_rot))
+            idealAccels.append(accelerationXout)
+            print("\033[F\033[F {:3d} Counts X: {:7d}    Counts Y: {:7d}    Accel X: {:10.4f}    Accel Ideal X: {:10.4f}".format(df,accelerometerCountsXout,accelerometerCountsYout,accelX(y_rot),accelerationXout))
+        elif(sensor == 'y'):
+            counts.append(accelerometerCountsYout)
+            accels.append(accelY(x_rot))
+            idealAccels.append(accelerationYout)
+            print("\033[F\033[F {:3d} Counts X: {:7d}    Counts Y: {:7d}    Accel Y: {:10.4f}    Accel Ideal Y: {:10.4f}".format(df,accelerometerCountsXout,accelerometerCountsYout,accelY(x_rot),accelerationYout))
+        elif(sensor == 'z'):
+            counts.append(accelerometerCountsZout)
+            accels.append(accelZ(x_rot,y_rot))
+            idealAccels.append(accelerationZout)
+            print("\033[F\033[F {:3d} Counts X: {:7d}    Counts Y: {:7d}    Accel Z: {:10.4f}    Accel Ideal Z: {:10.4f}".format(df,accelerometerCountsXout,accelerometerCountsYout,accelZ(x_rot,y_rot),accelerationZout))
+    return counts, idealAccels, accels
+
+# Measure and find the uncertainty for 1 orientation
+def measureOrientation():
+    try:
+        sensor = input("Select a sensor to focus on (X,Y or Z): ").lower()
+        if(len(sensor) > 0):
+            if(sensor in 'xyz'):
+                counts, idealAccels, accels = takeDataMPU(sensor)
+                measurement_mean = np.mean(counts)
+                measurement_stdev = np.std(counts)
+                df = len(counts) - 1
+                uncertainty = t.ppf(0.025,df) * measurement_stdev / math.sqrt(len(counts))
+                print("\nAverage counts: {:.0f} \u00B1 {:.0f} counts".format(measurement_mean,abs(uncertainty)))
+    except KeyboardInterrupt:
+        pass
+    return
+
+
 # 1st Degree Calibratation of X,Y, or Z sensor
 def calibrateMPU():
     global G_XcountOffset
@@ -115,42 +214,8 @@ def calibrateMPU():
         for opt in options:
             if opt in 'xyz':
                 print("\tCalibrating {} Sensor".format(opt))
-                counts, idealAccels, accels = [], [], []
-                df = -1
-                while(input('Orientate the sensor, then press \'Enter\' when you are ready\nto record the data point or type \'q\' to quit: ') != 'q'):
-                    # Read the acceleration values from the sensor
-                    accelerometerCountsXout = read_word_2c(0x3b)
-                    accelerometerCountsYout = read_word_2c(0x3d)
-                    accelerometerCountsZout = read_word_2c(0x3f)
-                    
-                    # Use the acceleration values to approximate the x and y rotation of the sensor
-                    x_rot = get_x_rotation(accelerometerCountsXout,accelerometerCountsYout,accelerometerCountsZout)
-                    y_rot = get_y_rotation(accelerometerCountsXout,accelerometerCountsYout,accelerometerCountsZout)
-                    
-                    # Use the ideal factory calibration to find the ideal acceleration
-                    accelerationXout = accelerometerCountsXout / 16384.0
-                    accelerationYout = accelerometerCountsYout / 16384.0
-                    accelerationZout = accelerometerCountsZout / 16384.0
-                    
-                    # Increase the degrees of freedom after each new data point
-                    df += 1
-                    
-                    # Append the counts, actual acceleration values, and the ideal acceleration values to a list
-                    if(opt == 'x'):
-                        counts.append(accelerometerCountsXout)
-                        accels.append(accelX(y_rot))
-                        idealAccels.append(accelerationXout)
-                        print("\033[F\033[F {:3d} Counts X: {:7d}    Counts Y: {:7d}    Accel X: {:10.4f}    Accel Ideal X: {:10.4f}".format(df,accelerometerCountsXout,accelerometerCountsYout,accelX(y_rot),accelerationXout))
-                    elif(opt == 'y'):
-                        counts.append(accelerometerCountsYout)
-                        accels.append(accelY(x_rot))
-                        idealAccels.append(accelerationYout)
-                        print("\033[F\033[F {:3d} Counts X: {:7d}    Counts Y: {:7d}    Accel Y: {:10.4f}    Accel Ideal Y: {:10.4f}".format(df,accelerometerCountsXout,accelerometerCountsYout,accelY(x_rot),accelerationYout))
-                    elif(opt == 'z'):
-                        counts.append(accelerometerCountsZout)
-                        accels.append(accelZ(x_rot,y_rot))
-                        idealAccels.append(accelerationZout)
-                        print("\033[F\033[F {:3d} Counts X: {:7d}    Counts Y: {:7d}    Accel Z: {:10.4f}    Accel Ideal Z: {:10.4f}".format(df,accelerometerCountsXout,accelerometerCountsYout,accelZ(x_rot,y_rot),accelerationZout))
+                counts, idealAccels, accels = takeDataMPU(sensor = opt, factoryCal = True)
+                df = len(counts)
 
                 if(df > 1):
                     # Sort the data by the acceleration values
@@ -174,7 +239,7 @@ def calibrateMPU():
                     std_error = np.std(errorSorted)
 
                     # Calculate the student's uncertainty of the data
-                    uncertainty = t.ppf(0.025,df) * std_error / math.sqrt(df)
+                    uncertainty = t.ppf(0.025,df) * std_error / math.sqrt(df+1)
 
                     print("\nLinear Regression: y = mx + b, where m = {:.4f}, b = {:.4f}".format(fit.coef_[0],fit.intercept_))
                     print("R2 =",fit.score(np.asarray(accelsSorted)[:,np.newaxis],np.asarray(countsSorted1)))
@@ -207,15 +272,71 @@ def calibrateMPU():
                     for ax in axs.flat:
                         ax.label_outer()
                     plt.show()
+
+                    saveFile = input("\nWould you like to save this calibration? (y/n): ").lower()
+                    if(saveFile == 'y'):
+                        global G_calibrationFile
+                        global G_csvWriter
+                        global G_calibrations
+                        if(G_calibrationFile == None):
+                            getCSV()
+                        calibrationName = input("Choose a name for your calibration: ")
+                        G_calibrations.append({'name':calibrationName,'coefficient':fit.coef_[0],'intercept':fit.intercept_})
+                        print("Saved!")
                 else:
                     print("Not enough points taken, exiting this calibration...")
-                
     except KeyboardInterrupt:
         pass
     return
 
+# Load a previous calibration
+def loadCalibration():
+    global G_XcountOffset
+    global G_YcountOffset
+    global G_ZcountOffset
+    global G_XcountsPerG
+    global G_YcountsPerG
+    global G_ZcountsPerG
+    global G_calibrations
+    print("The loaded calibrations are:")
+    index = 0
+    calNames = []
+    for cal in G_calibrations:
+        print("\t{}:\t{}".format(index,cal['name']))
+        index += 1
+    for sensor in 'XYZ':
+        calIndex = input('\nSelect a calibration index to load for the {} sensor (or press \'Enter\' to skip): '.format(sensor))
+        if(len(calIndex) > 0):
+            if((calIndex in '0123456789') and (int(calIndex) < index)):
+                calIndex = int(calIndex)
+                if(sensor == 'X'):
+                    G_XcountOffset = float(G_calibrations[calIndex]['intercept'])
+                    G_XcountsPerG = float(G_calibrations[calIndex]['coefficient'])
+                    print("\tSet Offset to {} and slope to {} for {}".format(G_XcountOffset,G_XcountsPerG,sensor))
+                elif(sensor == 'Y'):
+                    G_YcountOffset = float(G_calibrations[calIndex]['intercept'])
+                    G_YcountsPerG = float(G_calibrations[calIndex]['coefficient'])
+                    print("\tSet Offset to {} and slope to {} for {}".format(G_YcountOffset,G_YcountsPerG,sensor))
+                elif(sensor == 'Z'):
+                    G_ZcountOffset = float(G_calibrations[calIndex]['intercept'])
+                    G_ZcountsPerG = float(G_calibrations[calIndex]['coefficient'])
+                    print("\tSet Offset to {} and slope to {} for {}".format(G_ZcountOffset,G_ZcountsPerG,sensor))
+            else:
+                print("\tInvalid calibration index")
+        else:
+            print("\tSkipping...")
+    return
+
+# Toggle the G_keepHistory bool
+def toggleHistory():
+    global G_keepHistory
+    G_keepHistory = not G_keepHistory
+    print("Keep History flag is now set to",G_keepHistory)
+    return
+
 # Display the gyroscope data every half-second
 def continuousGyro():
+    global G_keepHistory
     try:
         print("\n -Gyroscope- Press CTRL+C to exit.")
         while(True):
@@ -224,17 +345,21 @@ def continuousGyro():
             gyroskop_yout = read_word_2c(0x45)
             gyroskop_zout = read_word_2c(0x47)
 
-            print ("Gyroscope X: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_xout,gyroskop_xout / 131))
-            print ("Gyroscope Y: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_yout,gyroskop_yout / 131))
-            print ("Gyroscope Z: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_zout,gyroskop_zout / 131))
+            print("Gyroscope X: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_xout,gyroskop_xout / 131))
+            print("Gyroscope Y: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_yout,gyroskop_yout / 131))
+            print("Gyroscope Z: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_zout,gyroskop_zout / 131))
             time.sleep(0.5)
-            print("\033[F "*4)
+            if(G_keepHistory):
+                print()
+            else:
+                print("\033[F "*4)
     except KeyboardInterrupt:
         pass
     return
 
 # Display the acceleration data every half-second
 def continuousAccel():
+    global G_keepHistory
     try:
         print("\n -Accelerometer- Press CTRL+C to exit.")
         while(True):
@@ -253,13 +378,17 @@ def continuousAccel():
             print("Y Counts: {:7d}    Normalized: {:8.4f}    ".format(accelerometerCountsYout,accelerationYout))
             print("Z Counts: {:7d}    Normalized: {:8.4f}    ".format(accelerometerCountsZout,accelerationZout))
             time.sleep(0.5)
-            print("\033[F"*4)
+            if(G_keepHistory):
+                print()
+            else:
+                print("\033[F "*4)
     except KeyboardInterrupt:
         pass
     return
 
 # Display the rotation angles every half-second
 def continuousRot():
+    global G_keepHistory
     try:
         print("\n -MPU Rotation- Press CTRL+C to exit.")
         while(True):
@@ -274,11 +403,11 @@ def continuousRot():
             accelerationYout = (accelerometerCountsYout - G_YcountOffset) / G_YcountsPerG
             accelerationZout = (accelerometerCountsZout - G_ZcountOffset) / G_ZcountsPerG
             
-            theta_x = -math.asin(max(-1,min(1,accelerationXout)))
+            theta_x = math.asin(max(-1,min(1,accelerationXout)))
             theta_z = math.acos(max(-1,min(1,accelerationZout)))
             
-            wx = math.sin(theta_z)**2
-            wz = math.cos(theta_z)**2
+            wx = math.cos(theta_x)**2
+            wz = math.sin(theta_x)**2
             
             theta_avg = math.degrees(wx*theta_x + wz*theta_z)
             
@@ -286,10 +415,26 @@ def continuousRot():
             print("Y Rot: {:8.4f}    ".format(y_rot))
             print("Avg Rot: {:8.4f}    ".format(theta_avg))
             time.sleep(0.5)
-            print("\033[F"*4)
+            if(G_keepHistory):
+                print()
+            else:
+                print("\033[F "*4)
     except KeyboardInterrupt:
             pass
     return
+
+# Write to a register
+def setAccelScale():
+    accelScales = {'0':{'description':'2g','val':0},'1':{'description':'4g','val':8},'2':{'description':'8g','val':16},'3':{'description':'16g','val':24}}
+    print("Acceleration Scales:")
+    for opt in sorted(list(accelScales.keys())):
+        print('\t{}:\t\u00B1{}'.format(opt,accelScales[opt]['description']))
+    scaleOpt = input('Select an option:')
+    if len(scaleOpt) > 0:
+        if scaleOpt in accelScales.keys():
+            write_byte(0x68, 28, accelScales[scaleOpt]['val'])
+        else:
+            print("Please enter a valid option!")
 
 # List all the valid user commands
 def listCommands():
@@ -310,11 +455,15 @@ address = 0x68       # via i2cdetect
 bus.write_byte_data(address, power_mgmt_1, 0)
 
 # Create a list of commands and assign each a function pointer to execute when called
-options = {'0': {'exe':listCommands,'description':'Prints this menu'},
-		   '1': {'exe':calibrateMPU,'description':'Calibarate MPU'},
+options = {'h': {'exe':listCommands,'description':'Prints this menu'},
+                   '1': {'exe':measureOrientation,'description':'Measure a single sensor in one orientation'},
 		   '2': {'exe':continuousGyro,'description':'Read Gyro Continuously'},
 		   '3': {'exe':continuousAccel,'description':'Read Acceleration Continuously'},
 		   '4': {'exe':continuousRot,'description':'Read Rotation Continuously'},
+		   '5': {'exe':calibrateMPU,'description':'Calibarate MPU'},
+                   '6': {'exe':loadCalibration,'description':'Load a previous calibration'},
+                   '7': {'exe':setAccelScale,'description':'Sets the scale of the accelerometer'},
+                   '99':{'exe':toggleHistory,'description':'Sets or unsets continuous read data to show the history of data'},
                    'q': {'exe':quit,'description':'Exit Program'}}
 listCommands()
 try:
@@ -332,3 +481,6 @@ try:
 
 except KeyboardInterrupt:
     print()
+finally:
+    if(len(G_calibrations) > 0):
+        writeCSV()
