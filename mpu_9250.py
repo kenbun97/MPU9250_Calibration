@@ -391,6 +391,9 @@ def continuousRot():
     global G_keepHistory
     try:
         print("\n -MPU Rotation- Press CTRL+C to exit.")
+        startTime = time.time()
+        i = 0
+        data = []
         while(True):
             accelerometerCountsXout = read_word_2c(0x3b)
             accelerometerCountsYout = read_word_2c(0x3d)
@@ -411,16 +414,44 @@ def continuousRot():
             
             theta_avg = math.degrees(wx*theta_x + wz*theta_z)
             
+            sampleTime = round(float(time.time()) - startTime,4)
+
+            print("Sample Time: {:8.4f} Sample: {}    ".format(sampleTime,i))
             print("X Rot: {:8.4f}    ".format(x_rot))
             print("Y Rot: {:8.4f}    ".format(y_rot))
             print("Avg Rot: {:8.4f}    ".format(theta_avg))
-            time.sleep(0.5)
+            data.append({'time':sampleTime,'xRot':x_rot,'yRot':y_rot})
+            i += 1
+            time.sleep(0.1)
             if(G_keepHistory):
                 print()
             else:
-                print("\033[F "*4)
+                print("\033[F"*5)
     except KeyboardInterrupt:
-            pass
+        times, xRots, yRots = [],[],[]
+        for sample in data:
+            times.append(sample['time'])
+            xRots.append(sample['xRot'])
+            yRots.append(sample['yRot'])
+        fig, axs = plt.subplots(2)
+        fig.suptitle('Rotation of Accelerometer vs Time')
+        axs[0].plot(times,xRots,'r:.')
+        axs[1].plot(times,yRots,'k--o')
+        axs[0].set(xlabel='Time [/s]', ylabel='Rotation [/\u00b0]')
+        axs[1].set(xlabel='Time [/s]', ylabel='Rotation [/\u00b0]')
+        for ax in axs.flat:
+            ax.label_outer()
+        plt.show()
+        dataName = input("\n\nIf you would like to save your data, enter the name that you would to save it as here. Otherwise, press enter: ").strip()
+        if(len(dataName) > 0):
+            if('.csv' not in dataName):
+                dataName += '.csv'
+            dataFile = open(dataName, 'w+')
+            fields = ['time','xRot','yRot']
+            csvDataWriter = csv.DictWriter(dataFile,fields)
+            csvDataWriter.writeheader()
+            csvDataWriter.writerows(data)
+            print("Saved as {}!".format(dataName))
     return
 
 # Write to a register
