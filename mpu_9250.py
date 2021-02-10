@@ -437,8 +437,8 @@ def continuousRot():
         fig.suptitle('Rotation of Accelerometer vs Time')
         axs[0].plot(times,xRots,'r:.')
         axs[1].plot(times,yRots,'k--o')
-        axs[0].set(xlabel='Time [/s]', ylabel='Rotation [/\u00b0]')
-        axs[1].set(xlabel='Time [/s]', ylabel='Rotation [/\u00b0]')
+        axs[0].set(xlabel='Time [/s]', ylabel='X Rotation [/\u00b0]')
+        axs[1].set(xlabel='Time [/s]', ylabel='Y Rotation [/\u00b0]')
         for ax in axs.flat:
             ax.label_outer()
         plt.show()
