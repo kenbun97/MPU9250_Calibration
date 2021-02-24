@@ -49,6 +49,8 @@ G_keepHistory = False
 G_calibrationFile = None
 G_csvWriter = None
 G_calibrations = []
+G_stopAtTrial = 9999
+G_sampleRate = 0.001
 
 # Create the Calibration CSV if it does not exist
 def getCSV():
@@ -61,7 +63,6 @@ def getCSV():
         csvReader = csv.DictReader(readCalibrationFile)
         for line in csvReader:
             G_calibrations.append(line)
-        print(G_calibrations)
     else:
         newFileFlag = True
     G_calibrationFile = open('calibrations.csv', 'w', newline='')
@@ -337,32 +338,38 @@ def toggleHistory():
 # Display the gyroscope data every half-second
 def continuousGyro():
     global G_keepHistory
+    global G_stopAtTrial
+    trial = 0
+    print("\n -Gyroscope- Press CTRL+C to exit.")
     try:
-        print("\n -Gyroscope- Press CTRL+C to exit.")
-        while(True):
+        while(trial < G_stopAtTrial):
             # Read the gyroscope counts from the MPU sensor
             gyroskop_xout = read_word_2c(0x43)
             gyroskop_yout = read_word_2c(0x45)
             gyroskop_zout = read_word_2c(0x47)
 
+            print("Trial:",trial)
             print("Gyroscope X: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_xout,gyroskop_xout / 131))
             print("Gyroscope Y: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_yout,gyroskop_yout / 131))
             print("Gyroscope Z: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_zout,gyroskop_zout / 131))
-            time.sleep(0.5)
-            if(G_keepHistory):
+            time.sleep(G_sampleRate)
+            if(G_keepHistory or ((trial+1) == G_stopAtTrial)):
                 print()
             else:
-                print("\033[F "*4)
+                print("\033[F "*5)
+            trial += 1
     except KeyboardInterrupt:
-        pass
+        print("\n\n\n\n")
     return
 
 # Display the acceleration data every half-second
 def continuousAccel():
     global G_keepHistory
+    global G_stopAtTrial
+    trial = 0
     try:
         print("\n -Accelerometer- Press CTRL+C to exit.")
-        while(True):
+        while(trial < G_stopAtTrial):
             # Read the acceleration counts from the MPU sensor
             accelerometerCountsXout = read_word_2c(0x3b)
             accelerometerCountsYout = read_word_2c(0x3d)
@@ -374,27 +381,30 @@ def continuousAccel():
             accelerationYout = (accelerometerCountsYout - G_YcountOffset) / G_YcountsPerG
             accelerationZout = (accelerometerCountsZout - G_ZcountOffset) / G_ZcountsPerG
             
+            print("Trial:",trial)
             print("X Counts: {:7d}    Normalized: {:8.4f}    ".format(accelerometerCountsXout,accelerationXout))
             print("Y Counts: {:7d}    Normalized: {:8.4f}    ".format(accelerometerCountsYout,accelerationYout))
             print("Z Counts: {:7d}    Normalized: {:8.4f}    ".format(accelerometerCountsZout,accelerationZout))
-            time.sleep(0.5)
-            if(G_keepHistory):
+            time.sleep(G_sampleRate)
+            if(G_keepHistory or ((trial+1) == G_stopAtTrial)):
                 print()
             else:
-                print("\033[F "*4)
+                print("\033[F "*5)
+            trial += 1
     except KeyboardInterrupt:
-        pass
+        print("\n\n\n\n")
     return
 
 # Display the rotation angles every half-second
 def continuousRot():
     global G_keepHistory
+    global G_stopAtTrial
+    trial = 0
     try:
         print("\n -MPU Rotation- Press CTRL+C to exit.")
         startTime = time.time()
-        i = 0
         data = []
-        while(True):
+        while(trial < G_stopAtTrial):
             accelerometerCountsXout = read_word_2c(0x3b)
             accelerometerCountsYout = read_word_2c(0x3d)
             accelerometerCountsZout = read_word_2c(0x3f)
@@ -416,18 +426,19 @@ def continuousRot():
             
             sampleTime = round(float(time.time()) - startTime,4)
 
-            print("Sample Time: {:8.4f} Sample: {}    ".format(sampleTime,i))
+            print("Sample Time: {:8.4f} Sample: {}    ".format(sampleTime,trial))
             print("X Rot: {:8.4f}    ".format(x_rot))
             print("Y Rot: {:8.4f}    ".format(y_rot))
             print("Avg Rot: {:8.4f}    ".format(theta_avg))
             data.append({'time':sampleTime,'xRot':x_rot,'yRot':y_rot})
-            i += 1
-            time.sleep(0.1)
-            if(G_keepHistory):
+            time.sleep(G_sampleRate)
+            if(G_keepHistory or ((trial+1) == G_stopAtTrial)):
                 print()
             else:
                 print("\033[F"*5)
+            trial += 1
     except KeyboardInterrupt:
+        print("\n\n\n\n")
         times, xRots, yRots = [],[],[]
         for sample in data:
             times.append(sample['time'])
@@ -454,6 +465,100 @@ def continuousRot():
             print("Saved as {}!".format(dataName))
     return
 
+# Display the rotation and gyroscope data
+def continuousRotGyro():
+    global G_keepHistory
+    global G_stopAtTrial
+    trial = 0
+    startTime = time.time()
+    data = []
+    print("\n -Gyroscope and Rotation- Press CTRL+C to exit.")
+    try:
+        while(trial < G_stopAtTrial):
+            # Read the gyroscope counts from the MPU sensor
+            gyroskop_xout = read_word_2c(0x43)
+            gyroskop_yout = read_word_2c(0x45)
+            gyroskop_zout = read_word_2c(0x47)
+
+            accelerometerCountsXout = read_word_2c(0x3b)
+            accelerometerCountsYout = read_word_2c(0x3d)
+            accelerometerCountsZout = read_word_2c(0x3f)
+            
+            x_rot = get_x_rotation(accelerometerCountsXout,accelerometerCountsYout,accelerometerCountsZout)
+            y_rot = get_y_rotation(accelerometerCountsXout,accelerometerCountsYout,accelerometerCountsZout)
+            
+            accelerationXout = (accelerometerCountsXout - G_XcountOffset) / G_XcountsPerG
+            accelerationYout = (accelerometerCountsYout - G_YcountOffset) / G_YcountsPerG
+            accelerationZout = (accelerometerCountsZout - G_ZcountOffset) / G_ZcountsPerG
+            
+            theta_x = math.asin(max(-1,min(1,accelerationXout)))
+            theta_z = math.acos(max(-1,min(1,accelerationZout)))
+            
+            wx = math.cos(theta_x)**2
+            wz = math.sin(theta_x)**2
+            
+            theta_avg = math.degrees(wx*theta_x + wz*theta_z)
+            
+            sampleTime = round(float(time.time()) - startTime,4)
+
+            print("Sample Time: {:8.4f} Sample: {}    ".format(sampleTime,trial))
+            print("X Rot: {:8.4f}    ".format(x_rot))
+            print("Y Rot: {:8.4f}    ".format(y_rot))
+            print("Avg Rot: {:8.4f}    ".format(theta_avg))
+
+            print("Gyroscope X: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_xout,gyroskop_xout / 131))
+            print("Gyroscope Y: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_yout,gyroskop_yout / 131))
+            print("Gyroscope Z: {:7d}    Normalized: {:8.4f}    ".format(gyroskop_zout,gyroskop_zout / 131))
+            data.append({'time':sampleTime,'xRot':x_rot,'yRot':y_rot,'xGyro':gyroskop_xout/131,
+                'yGyro':gyroskop_yout/131,'zGyro':gyroskop_zout/131})
+            time.sleep(G_sampleRate)
+            if(G_keepHistory or ((trial+1) == G_stopAtTrial)):
+                print()
+            else:
+                print("\033[F"*8)
+            trial += 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n\n\n\n")
+        times, xRots, yRots, xGyros, yGyros, zGyros = [],[],[],[],[],[]
+        for sample in data:
+            times.append(sample['time'])
+            xRots.append(sample['xRot'])
+            yRots.append(sample['yRot'])
+            xGyros.append(sample['xGyro'])
+            yGyros.append(sample['yGyro'])
+            zGyros.append(sample['zGyro'])
+        print("Average Sample Time: {:.4f} seconds".format(times[-1]/len(times)))
+        fig, axs = plt.subplots(2,2)
+        fig.suptitle('Rotation of Accelerometer vs Time')
+        axs[0,0].plot(times,xRots,'r:.')
+        axs[0,1].plot(times,yRots,'k--o')
+        axs[0,0].set(ylabel='Rotation [/\u00b0]')#, xlabel='Time [/s]')
+        #axs[0,1].set(xlabel='Time [/s]', ylabel='Rotation [/\u00b0]')
+
+        axs[1,0].plot(times,xGyros,'r:.')
+        axs[1,1].plot(times,yGyros,'k--o')
+        axs[1,0].set(ylabel='Rotation Rate [s/\u00b0]', xlabel='Time [/s]')
+        axs[1,1].set(xlabel='Time [/s]')#, ylabel='Rotation Rate [s/\u00b0]')
+
+        axs[0,0].set_title('X AXIS')
+        axs[0,1].set_title('Y AXIS')
+        #for ax in axs.flat:
+        #    ax.label_outer()
+        plt.show()
+        dataName = input("\n\nIf you would like to save your data, enter the name that you would to save it as here. Otherwise, press enter: ").strip()
+        if(len(dataName) > 0):
+            if('.csv' not in dataName):
+                dataName += '.csv'
+            dataFile = open(dataName, 'w+')
+            fields = list(sample.keys())
+            csvDataWriter = csv.DictWriter(dataFile,fields)
+            csvDataWriter.writeheader()
+            csvDataWriter.writerows(data)
+            print("Saved as {}!".format(dataName))
+    return
+
 # Write to a register
 def setAccelScale():
     accelScales = {'0':{'description':'2g','val':0},'1':{'description':'4g','val':8},'2':{'description':'8g','val':16},'3':{'description':'16g','val':24}}
@@ -466,6 +571,24 @@ def setAccelScale():
             write_byte(0x68, 28, accelScales[scaleOpt]['val'])
         else:
             print("Please enter a valid option!")
+
+# Sets the continuous read stop index
+def setStopIndex():
+    global G_stopAtTrial
+    stopIndex = int(input("Type in the desired amount of samples (Type '-1' for continuous read): "))
+    if(stopIndex < 0):
+        stopIndex = 9999
+    G_stopAtTrial = stopIndex
+    print("Stop Index set to",G_stopAtTrial)
+
+# Sets the sample rate
+def setSampleRate():
+    global G_sampleRate
+    sampleRate = float(input("Type in the desired sample rate in seconds: "))
+    if(sampleRate < 0):
+        sampleRate = 0.001
+    G_sampleRate = sampleRate
+    print("Sample rate set to",G_sampleRate)
 
 # List all the valid user commands
 def listCommands():
@@ -491,10 +614,13 @@ options = {'h': {'exe':listCommands,'description':'Prints this menu'},
 		   '2': {'exe':continuousGyro,'description':'Read Gyro Continuously'},
 		   '3': {'exe':continuousAccel,'description':'Read Acceleration Continuously'},
 		   '4': {'exe':continuousRot,'description':'Read Rotation Continuously'},
-		   '5': {'exe':calibrateMPU,'description':'Calibarate MPU'},
-                   '6': {'exe':loadCalibration,'description':'Load a previous calibration'},
-                   '7': {'exe':setAccelScale,'description':'Sets the scale of the accelerometer'},
-                   '99':{'exe':toggleHistory,'description':'Sets or unsets continuous read data to show the history of data'},
+                   '5': {'exe':continuousRotGyro,'description':'Read Rotation and Gyro continuously'},
+		   '50': {'exe':calibrateMPU,'description':'Calibarate MPU'},
+                   '51': {'exe':loadCalibration,'description':'Load a previous calibration'},
+                   '52': {'exe':setAccelScale,'description':'Sets the scale of the accelerometer'},
+                   '53':{'exe':toggleHistory,'description':'Sets or unsets continuous read data to show the history of data'},
+                   '54':{'exe':setStopIndex,'description':"Sets the 'continuous' stop index"},
+                   '55':{'exe':setSampleRate,'description':'Sets the sample rate'},
                    'q': {'exe':quit,'description':'Exit Program'}}
 listCommands()
 try:
